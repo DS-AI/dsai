@@ -1,0 +1,27 @@
+{
+  "components": [
+    {
+      "name": "Anaconda", 
+      "pkg_version": "#VERSION#",
+      "version": "#VERSION#"
+    }
+  ], 
+  "extraVersionInfo": {
+    "baseVersion": "#VERSION#",
+    "fullVersion": "#VERSION#-#ARCH#",
+    "patchCount": "p0"
+  },
+  "packages": [], 
+  "groups": [], 
+  "name": "Anaconda", 
+  "provides": [
+    "spark-plugin"
+  ], 
+  "schema_version": 1,
+  "scripts": {
+    "defines": "conda_env.sh"
+  }, 
+  "setActiveSymlink": true, 
+  "users": {}, 
+  "version": "#VERSION#"
+}

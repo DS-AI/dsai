@@ -1,0 +1,18 @@
+{
+    "argv": [
+        "#PYTHON#",
+        "-m",
+        "ipykernel_launcher",
+        "-f",
+       "{connection_file}"
+    ],
+    "display_name": "Python #VERSION# + PySpark",
+    "language": "python",
+    "env": {
+        "JAVA_HOME": "/usr/java/default/",
+        "SPARK_HOME": "/opt/cloudera/parcels/CDH/lib/spark/",
+        "PYTHONSTARTUP": "/opt/cloudera/parcels/CDH/lib/spark/python/pyspark/shell.py",
+        "PYTHONPATH": "/opt/cloudera/parcels/CDH/lib/spark/python/:#PY4J#",
+        "PYSPARK_PYTHON": "#PYTHON#"
+    }
+}

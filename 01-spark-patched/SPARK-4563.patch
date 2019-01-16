@@ -1,0 +1,368 @@
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/network/netty/NettyBlockTransferService.scala spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/network/netty/NettyBlockTransferService.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/network/netty/NettyBlockTransferService.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/network/netty/NettyBlockTransferService.scala	2018-10-18 17:28:47.904054339 -0400
+@@ -37,7 +37,13 @@
+ /**
+  * A BlockTransferService that uses Netty to fetch a set of blocks at at time.
+  */
+-class NettyBlockTransferService(conf: SparkConf, securityManager: SecurityManager, numCores: Int)
++class NettyBlockTransferService(
++    conf: SparkConf,
++    securityManager: SecurityManager,
++    bindAddress: String,
++    override val hostName: String,
++    _port: Int,
++    numCores: Int)
+   extends BlockTransferService {
+ 
+   // TODO: Don't use Java serialization, use a more cross-version compatible serialization format.
+@@ -69,12 +75,11 @@
+   /** Creates and binds the TransportServer, possibly trying multiple ports. */
+   private def createServer(bootstraps: List[TransportServerBootstrap]): TransportServer = {
+     def startService(port: Int): (TransportServer, Int) = {
+-      val server = transportContext.createServer(port, bootstraps.asJava)
++      val server = transportContext.createServer(bindAddress, port, bootstraps.asJava)
+       (server, server.getPort)
+     }
+ 
+-    val portToTry = conf.getInt("spark.blockManager.port", 0)
+-    Utils.startServiceOnPort(portToTry, startService, conf, getClass.getName)._1
++    Utils.startServiceOnPort(_port, startService, conf, getClass.getName)._1
+   }
+ 
+   override def fetchBlocks(
+@@ -107,8 +112,6 @@
+     }
+   }
+ 
+-  override def hostName: String = Utils.localHostName()
+-
+   override def port: Int = server.getPort
+ 
+   override def uploadBlock(
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/akka/AkkaRpcEnv.scala spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/akka/AkkaRpcEnv.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/akka/AkkaRpcEnv.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/akka/AkkaRpcEnv.scala	2018-10-18 17:36:09.064059408 -0400
+@@ -306,7 +306,7 @@
+ 
+   def create(config: RpcEnvConfig): RpcEnv = {
+     val (actorSystem, boundPort) = AkkaUtils.createActorSystem(
+-      config.name, config.host, config.port, config.conf, config.securityManager)
++      config.name, config.bindAddress, config.port, config.conf, config.securityManager)
+     actorSystem.actorOf(Props(classOf[ErrorMonitor]), "ErrorMonitor")
+     new AkkaRpcEnv(actorSystem, config.securityManager, config.conf, boundPort)
+   }
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/netty/NettyRpcEnv.scala	2018-10-17 14:48:19.457050106 -0400
+@@ -110,14 +110,14 @@
+     }
+   }
+ 
+-  def startServer(port: Int): Unit = {
++  def startServer(bindAddress: String, port: Int): Unit = {
+     val bootstraps: java.util.List[TransportServerBootstrap] =
+       if (securityManager.isAuthenticationEnabled()) {
+         java.util.Arrays.asList(new SaslServerBootstrap(transportConf, securityManager))
+       } else {
+         java.util.Collections.emptyList()
+       }
+-    server = transportContext.createServer(host, port, bootstraps)
++    server = transportContext.createServer(bindAddress, port, bootstraps)
+     dispatcher.registerRpcEndpoint(
+       RpcEndpointVerifier.NAME, new RpcEndpointVerifier(this, dispatcher))
+   }
+@@ -446,10 +446,11 @@
+     val javaSerializerInstance =
+       new JavaSerializer(sparkConf).newInstance().asInstanceOf[JavaSerializerInstance]
+     val nettyEnv =
+-      new NettyRpcEnv(sparkConf, javaSerializerInstance, config.host, config.securityManager)
++      new NettyRpcEnv(sparkConf, javaSerializerInstance, config.advertiseAddress,
++        config.securityManager)
+     if (!config.clientMode) {
+       val startNettyRpcEnv: Int => (NettyRpcEnv, Int) = { actualPort =>
+-        nettyEnv.startServer(actualPort)
++        nettyEnv.startServer(config.bindAddress, actualPort)
+         (nettyEnv, nettyEnv.address.port)
+       }
+       try {
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/RpcEnv.scala spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/RpcEnv.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/RpcEnv.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/rpc/RpcEnv.scala	2018-10-17 14:43:26.561046741 -0400
+@@ -49,7 +49,19 @@
+       securityManager: SecurityManager,
+       clientMode: Boolean = false): RpcEnv = {
+     // Using Reflection to create the RpcEnv to avoid to depend on Akka directly
+-    val config = RpcEnvConfig(conf, name, host, port, securityManager, clientMode)
++    create(name, host, host, port, conf, securityManager, clientMode)
++  }
++
++  def create(
++      name: String,
++      bindAddress: String,
++      advertiseAddress: String,
++      port: Int,
++      conf: SparkConf,
++      securityManager: SecurityManager,
++      clientMode: Boolean): RpcEnv = {
++    val config = RpcEnvConfig(conf, name, bindAddress, advertiseAddress, port, securityManager,
++      clientMode)
+     getRpcEnvFactory(conf).create(config)
+   }
+ }
+@@ -202,7 +214,8 @@
+ private[spark] case class RpcEnvConfig(
+     conf: SparkConf,
+     name: String,
+-    host: String,
++    bindAddress: String,
++    advertiseAddress: String,
+     port: Int,
+     securityManager: SecurityManager,
+     clientMode: Boolean)
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkContext.scala spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkContext.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkContext.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkContext.scala	2018-10-18 03:04:38.079557718 -0400
+@@ -418,8 +418,9 @@
+       logInfo("Spark configuration:\n" + _conf.toDebugString)
+     }
+ 
+-    // Set Spark driver host and port system properties
+-    _conf.setIfMissing("spark.driver.host", Utils.localHostName())
++    // Set Spark driver host and port system properties. This explicitly sets the configuration
++    // instead of relying on the default value of the config constant.
++    _conf.set("spark.driver.host", _conf.get("spark.driver.host", Utils.localHostName()))
+     _conf.setIfMissing("spark.driver.port", "0")
+ 
+     _conf.set("spark.executor.id", SparkContext.DRIVER_IDENTIFIER)
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkEnv.scala spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkEnv.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkEnv.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/SparkEnv.scala	2018-10-18 18:32:49.680098481 -0400
+@@ -189,7 +189,8 @@
+       mockOutputCommitCoordinator: Option[OutputCommitCoordinator] = None): SparkEnv = {
+     assert(conf.contains("spark.driver.host"), "spark.driver.host is not set on the driver!")
+     assert(conf.contains("spark.driver.port"), "spark.driver.port is not set on the driver!")
+-    val hostname = conf.get("spark.driver.host")
++    val advertiseAddress = conf.get("spark.driver.host")
++    val bindAddress = conf.get("spark.driver.bindAddress", advertiseAddress)
+     val port = conf.get("spark.driver.port").toInt
+     val ioEncryptionKey = if (conf.getBoolean(CryptoConf.SPARK_SHUFFLE_ENCRYPTION_ENABLED, false)) {
+       Some(CryptoStreamUtils.createKey(conf))
+@@ -199,7 +200,8 @@
+     create(
+       conf,
+       SparkContext.DRIVER_IDENTIFIER,
+-      hostname,
++      bindAddress,
++      advertiseAddress,
+       port,
+       isLocal,
+       numCores,
+@@ -225,6 +227,7 @@
+       conf,
+       executorId,
+       hostname,
++      hostname,
+       port,
+       isLocal,
+       numCores,
+@@ -240,7 +243,8 @@
+   private def create(
+       conf: SparkConf,
+       executorId: String,
+-      hostname: String,
++      bindAddress: String,
++      advertiseAddress: String,
+       port: Int,
+       isLocal: Boolean,
+       numUsableCores: Int,
+@@ -265,8 +269,8 @@
+ 
+     // Create the ActorSystem for Akka and get the port it binds to.
+     val actorSystemName = if (isDriver) driverActorSystemName else executorActorSystemName
+-    val rpcEnv = RpcEnv.create(actorSystemName, hostname, port, conf, securityManager,
+-      clientMode = !isDriver)
++    val rpcEnv = RpcEnv.create(actorSystemName, bindAddress, advertiseAddress, port, conf,
++      securityManager, clientMode = !isDriver)
+     val actorSystem: ActorSystem =
+       if (rpcEnv.isInstanceOf[AkkaRpcEnv]) {
+         rpcEnv.asInstanceOf[AkkaRpcEnv].actorSystem
+@@ -280,7 +284,7 @@
+         // Create a ActorSystem for legacy codes
+         AkkaUtils.createActorSystem(
+           actorSystemName + "ActorSystem",
+-          hostname,
++          bindAddress,
+           actorSystemPort,
+           conf,
+           securityManager
+@@ -371,7 +375,16 @@
+         UnifiedMemoryManager(conf, numUsableCores)
+       }
+ 
+-    val blockTransferService = new NettyBlockTransferService(conf, securityManager, numUsableCores)
++    val blockManagerPort = conf.getInt("spark.blockManager.port", 0)
++    val blockTransferServicePort = if (isDriver) {
++      conf.getInt("spark.driver.blockManager.port", blockManagerPort)
++    } else {
++      blockManagerPort
++    }
++
++    val blockTransferService =
++      new NettyBlockTransferService(conf, securityManager, bindAddress, advertiseAddress,
++        blockTransferServicePort, numUsableCores)
+ 
+     val blockManagerMaster = new BlockManagerMaster(registerOrLookupEndpoint(
+       BlockManagerMaster.DRIVER_ENDPOINT_NAME,
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/ui/WebUI.scala spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/ui/WebUI.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/ui/WebUI.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/main/scala/org/apache/spark/ui/WebUI.scala	2018-10-18 03:09:45.403561249 -0400
+@@ -50,7 +50,8 @@
+   protected val pageToHandlers = new HashMap[WebUIPage, ArrayBuffer[ServletContextHandler]]
+   protected var serverInfo: Option[ServerInfo] = None
+   protected val localHostName = Utils.localHostNameForURI()
+-  protected val publicHostName = Option(conf.getenv("SPARK_PUBLIC_DNS")).getOrElse(localHostName)
++  protected val publicHostName = Option(conf.getenv("SPARK_PUBLIC_DNS")).getOrElse(
++    conf.get("spark.driver.host", localHostName))
+   private val className = Utils.getFormattedClassName(this)
+ 
+   def getBasePath: String = basePath
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferSecuritySuite.scala spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferSecuritySuite.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferSecuritySuite.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferSecuritySuite.scala	2018-10-17 14:55:38.646055152 -0400
+@@ -106,11 +106,11 @@
+     when(blockManager.getBlockData(blockId)).thenReturn(blockBuffer)
+ 
+     val securityManager0 = new SecurityManager(conf0)
+-    val exec0 = new NettyBlockTransferService(conf0, securityManager0, numCores = 1)
++    val exec0 = new NettyBlockTransferService(conf0, securityManager0, "localhost", "localhost", 0, 1)
+     exec0.init(blockManager)
+ 
+     val securityManager1 = new SecurityManager(conf1)
+-    val exec1 = new NettyBlockTransferService(conf1, securityManager1, numCores = 1)
++    val exec1 = new NettyBlockTransferService(conf1, securityManager1, "localhost", "localhost", 0, 1)
+     exec1.init(blockManager)
+ 
+     val result = fetchBlock(exec0, exec1, "1", blockId) match {
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferServiceSuite.scala spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferServiceSuite.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferServiceSuite.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/network/netty/NettyBlockTransferServiceSuite.scala	2018-10-17 14:56:54.779056027 -0400
+@@ -72,10 +72,10 @@
+   private def createService(port: Int): NettyBlockTransferService = {
+     val conf = new SparkConf()
+       .set("spark.app.id", s"test-${getClass.getName}")
+-      .set("spark.blockManager.port", port.toString)
+     val securityManager = new SecurityManager(conf)
+     val blockDataManager = mock(classOf[BlockDataManager])
+-    val service = new NettyBlockTransferService(conf, securityManager, numCores = 1)
++    val service = new NettyBlockTransferService(conf, securityManager, "localhost", "localhost",
++      port, 1)
+     service.init(blockDataManager)
+     service
+   }
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/akka/AkkaRpcEnvSuite.scala spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/akka/AkkaRpcEnvSuite.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/akka/AkkaRpcEnvSuite.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/akka/AkkaRpcEnvSuite.scala	2018-10-18 18:04:45.062079125 -0400
+@@ -27,7 +27,7 @@
+       port: Int,
+       clientMode: Boolean = false): RpcEnv = {
+     new AkkaRpcEnvFactory().create(
+-      RpcEnvConfig(conf, name, "localhost", port, new SecurityManager(conf), clientMode))
++      RpcEnvConfig(conf, name, "localhost", "localhost", port, new SecurityManager(conf), clientMode))
+   }
+ 
+   test("setupEndpointRef: systemName, address, endpointName") {
+@@ -40,7 +40,7 @@
+     })
+     val conf = new SparkConf()
+     val newRpcEnv = new AkkaRpcEnvFactory().create(
+-      RpcEnvConfig(conf, "test", "localhost", 0, new SecurityManager(conf), false))
++      RpcEnvConfig(conf, "test", "localhost", "localhost", 0, new SecurityManager(conf), false))
+     try {
+       val newRef = newRpcEnv.setupEndpointRef("local", ref.address, "test_endpoint")
+       assert(s"akka.tcp://local@${env.address}/user/test_endpoint" ===
+@@ -59,7 +59,7 @@
+     val conf = SSLSampleConfigs.sparkSSLConfig()
+     val securityManager = new SecurityManager(conf)
+     val rpcEnv = new AkkaRpcEnvFactory().create(
+-      RpcEnvConfig(conf, "test", "localhost", 0, securityManager, false))
++      RpcEnvConfig(conf, "test", "localhost", "localhost", 0, securityManager, false))
+     try {
+       val uri = rpcEnv.uriOf("local", RpcAddress("1.2.3.4", 12345), "test_endpoint")
+       assert("akka.ssl.tcp://local@1.2.3.4:12345/user/test_endpoint" === uri)
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/netty/NettyRpcEnvSuite.scala spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/netty/NettyRpcEnvSuite.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/netty/NettyRpcEnvSuite.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/rpc/netty/NettyRpcEnvSuite.scala	2018-10-17 14:58:40.421057241 -0400
+@@ -27,8 +27,8 @@
+       name: String,
+       port: Int,
+       clientMode: Boolean = false): RpcEnv = {
+-    val config = RpcEnvConfig(conf, "test", "localhost", port, new SecurityManager(conf),
+-      clientMode)
++    val config = RpcEnvConfig(conf, "test", "localhost", "localhost", port,
++      new SecurityManager(conf), clientMode)
+     new NettyRpcEnvFactory().create(config)
+   }
+ 
+@@ -40,4 +40,15 @@
+     assert(e.getMessage.contains(uri))
+   }
+ 
++  test("advertise address different from bind address") {
++    val sparkConf = new SparkConf()
++    val config = RpcEnvConfig(sparkConf, "test", "localhost", "example.com", 0,
++      new SecurityManager(sparkConf), false)
++    val env = new NettyRpcEnvFactory().create(config)
++    try {
++      assert(env.address.hostPort.startsWith("example.com:"))
++    } finally {
++      env.shutdown()
++    }
++  }
+ }
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerReplicationSuite.scala spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerReplicationSuite.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerReplicationSuite.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerReplicationSuite.scala	2018-10-18 17:31:25.474056150 -0400
+@@ -62,7 +62,7 @@
+   private def makeBlockManager(
+       maxMem: Long,
+       name: String = SparkContext.DRIVER_IDENTIFIER): BlockManager = {
+-    val transfer = new NettyBlockTransferService(conf, securityMgr, numCores = 1)
++    val transfer = new NettyBlockTransferService(conf, securityMgr, "localhost", "localhost", 0, 1)
+     val memManager = new StaticMemoryManager(conf, Long.MaxValue, maxMem, numCores = 1)
+     val store = new BlockManager(name, rpcEnv, master, serializer, conf,
+       memManager, mapOutputTracker, shuffleManager, transfer, securityMgr, 0)
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerSuite.scala spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerSuite.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerSuite.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/core/src/test/scala/org/apache/spark/storage/BlockManagerSuite.scala	2018-10-18 17:32:03.889056591 -0400
+@@ -82,7 +82,7 @@
+       transferService: Option[BlockTransferService] = Option.empty): BlockManager = {
+     val serializer = new KryoSerializer(conf)
+     val transfer = transferService
+-      .getOrElse(new NettyBlockTransferService(conf, securityMgr, numCores = 1))
++      .getOrElse(new NettyBlockTransferService(conf, securityMgr, "localhost", "localhost", 0, 1))
+     val memManager = new StaticMemoryManager(conf, Long.MaxValue, maxMem, numCores = 1)
+     val blockManager = new BlockManager(name, rpcEnv, master, serializer, conf,
+       memManager, mapOutputTracker, shuffleManager, transfer, securityMgr, 0)
+@@ -908,7 +908,7 @@
+ 
+   test("block store put failure") {
+     // Use Java serializer so we can create an unserializable error.
+-    val transfer = new NettyBlockTransferService(conf, securityMgr, numCores = 1)
++    val transfer = new NettyBlockTransferService(conf, securityMgr, "localhost", "localhost", 0, 1)
+     val memoryManager = new StaticMemoryManager(
+       conf,
+       maxOnHeapExecutionMemory = Long.MaxValue,
+Only in spark-1.6.0-cdh5.15.1/: master.zip
+diff -ru rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/streaming/src/test/scala/org/apache/spark/streaming/ReceivedBlockHandlerSuite.scala spark-1.6.0-cdh5.15.1/streaming/src/test/scala/org/apache/spark/streaming/ReceivedBlockHandlerSuite.scala
+--- rpmbuild/BUILD/spark-1.6.0-cdh5.15.1/streaming/src/test/scala/org/apache/spark/streaming/ReceivedBlockHandlerSuite.scala	2018-08-09 12:14:00.000000000 -0400
++++ spark-1.6.0-cdh5.15.1/streaming/src/test/scala/org/apache/spark/streaming/ReceivedBlockHandlerSuite.scala	2018-10-18 17:32:25.747056842 -0400
+@@ -257,7 +257,7 @@
+       conf: SparkConf,
+       name: String = SparkContext.DRIVER_IDENTIFIER): BlockManager = {
+     val memManager = new StaticMemoryManager(conf, Long.MaxValue, maxMem, numCores = 1)
+-    val transfer = new NettyBlockTransferService(conf, securityMgr, numCores = 1)
++    val transfer = new NettyBlockTransferService(conf, securityMgr, "localhost", "localhost", 0, 1)
+     val blockManager = new BlockManager(name, rpcEnv, blockManagerMaster, serializer, conf,
+       memManager, mapOutputTracker, shuffleManager, transfer, securityMgr, 0)
+     memManager.setMemoryStore(blockManager.memoryStore)
