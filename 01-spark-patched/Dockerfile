@@ -14,11 +14,11 @@ RUN find . -type f -name '*.src.rpm' -exec basename {} \; | xargs rpm -ivh
 
 RUN yum-builddep spark-core
 
-COPY jdk-8u191-linux-x64.rpm /tmp/
+COPY jdk-8u*-linux-x64.rpm /tmp/
 
 RUN mkdir -p /usr/share/man/man1 \
-    && yum localinstall -y /tmp/jdk-8u191-linux-x64.rpm \
-    && rm /tmp/jdk-8u191-linux-x64.rpm
+    && yum localinstall -y `ls -1 /tmp/jdk-8u*-linux-x64.rpm` \
+    && rm /tmp/jdk-8u*-linux-x64.rpm
 
 ENV JAVA_HOME=/usr/java/default
 
