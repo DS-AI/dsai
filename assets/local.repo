@@ -1,5 +1,0 @@
-[localrepo]
-name=Local Repository
-baseurl=file:///var/yum/localrepo/
-enabled=1
-gpgcheck=0
