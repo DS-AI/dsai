@@ -1,0 +1,11 @@
+--- SOURCES/do-component-build.orig     2019-01-16 09:38:15.133149096 +0000
++++ SOURCES/do-component-build  2019-01-16 09:38:48.997180054 +0000
+@@ -37,7 +37,7 @@
+   cat >$MYMVN <<EOF
+ #!/bin/sh
+ export ZINC_OPTS="-Dzinc.dir=$PWD/target/zinc -Xmx2g -XX:MaxPermSize=512M -XX:ReservedCodeCacheSize=512m"
+-export APACHE_MIRROR=http://archive-primary.cloudera.com/tarballs/apache
++export APACHE_MIRROR=http://archive.cloudera.com/tarballs/apache
+ exec $PWD/build/mvn --force "\$@" $CAULDRON_MAVEN_EXTRA_ARGS
+ EOF
+   chmod 700 $MYMVN

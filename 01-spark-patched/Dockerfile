@@ -27,11 +27,14 @@ RUN yum install -y rsync
 WORKDIR /root/rpmbuild
 
 COPY NOCDH4.diff /tmp
+COPY APACHE_MIRROR.diff /tmp
 COPY SPARK-19019.patch /root/rpmbuild/SOURCES/
 COPY SPARK-4563.patch /root/rpmbuild/SOURCES/
 
 RUN patch -d /root/rpmbuild/SOURCES -p0 -i /tmp/NOCDH4.diff \
     && rm /tmp/NOCDH4.diff
+RUN patch -d /root/rpmbuild/SOURCES -p0 -i /tmp/APACHE_MIRROR.diff \
+    && rm /tmp/APACHE_MIRROR.diff
 
 COPY spark.spec SPECS/spark.spec
 
