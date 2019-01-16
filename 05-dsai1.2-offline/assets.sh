@@ -1,5 +1,7 @@
 #!/bin/bash
 
+mkdir -p assets/{parcels,rpms,spark-patch}
+
 cp ../04-cloudera-manager-api/*.jar assets/install-parcels/lib/
 
 cp ../03-anaconda-dsai-parcel-1.0/Anaconda*el7.parcel assets/parcels/
