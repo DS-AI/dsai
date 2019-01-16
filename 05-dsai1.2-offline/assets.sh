@@ -1,6 +1,6 @@
 #!/bin/bash
 
-mkdir -p assets/{parcels,rpms,spark-patch}
+mkdir -p assets/{install-parcels/lib,parcels,rpms,spark-patch}
 
 cp ../04-cloudera-manager-api/*.jar assets/install-parcels/lib/
 
